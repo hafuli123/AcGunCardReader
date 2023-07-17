@@ -35,7 +35,7 @@ struct __Config{
 
 __IO int fd_rc522, fd_led, fd_gc24, fd_spiflash;
 __IO uint8_t gc24_stat;
-__IO uint8_t rc522_rxbuf[16];
+__IO uint8_t rc522_rxbuf[16] , target_txbuf[4];
 __IO uint8_t flash_rxbuf[4] , flash_txbuf[4];
 __IO uint8_t atmod0[]="AT+MODE=0\r\n" , atmod1[]="AT+MODE=1\r\n" , atrn[]="\r\n";
 __IO uint8_t work_stat; //工作状态
@@ -53,19 +53,11 @@ int main(void)
 {
     HAL_Init();
     MX_GPIO_Init();
-//    rt_sec_delay(3);
-//    if(KEY_READ(KEY_ON_PIN)==KEY_ON_DOWN_LEVEL){
-//        /* 开启系统电源 */
-//        SYSTEM_POWER_ON();
-//    }
-//    else{
-//        return RT_EOK;
-//    }
-//    while(KEY_READ(KEY_ON_PIN)==KEY_ON_DOWN_LEVEL);//开机未松开按钮
-    rt_sec_delay(1);
+
+    rt_sec_delay(1);    //延时，这样可实现长按开机
     SYSTEM_POWER_ON();
 
-    Device_register(&rc522);
+    Device_register(&rc522);    //注册并开启设备
     Device_register(&led);
     Device_register(&gc24);
     Device_register(&spiflash);
@@ -75,26 +67,7 @@ int main(void)
     fd_gc24=Device_open("gc24",0);
     fd_spiflash=Device_open("spiflash",0);
 
-//    if(Device_read(fd_spiflash, (uint8_t*)flash_rxbuf, FLASH_CHK_ADD) != FLASH_CHK_VAL){
-//        *flash_txbuf = FLASH_CHK_VAL;
-//        Device_write(fd_spiflash, (uint8_t*)flash_txbuf, FLASH_CHK_ADD);
-//
-//        config.ip=0x0A5B;   //CH 10 ID 91
-//        *flash_txbuf = 0xAA;
-//        uint8_t *p;
-//        p=(uint8_t*)&config.ip;
-//        *(flash_txbuf+1) = *p;
-//        *(flash_txbuf+2) = *(p+1);
-//        Device_write(fd_spiflash, (uint8_t*)flash_txbuf, FLASH_IP_ADD);
-//    }
-//    else{
-//        Device_read(fd_spiflash, (uint8_t*)flash_rxbuf, FLASH_IP_ADD);
-//        uint16_t *p16;
-//        p16=(uint16_t*)(flash_rxbuf+1);
-//        config.ip=*p16;
-//    }
-
-
+    //创建子线程
     led_th.th = rt_thread_create("led_th", led_th_entry, NULL, 512, 10, 5);
     rt_thread_startup(led_th.th);
     rt_sem_init(&led_th.sem, "led_sem", 0, RT_IPC_FLAG_FIFO);
@@ -127,9 +100,9 @@ int main(void)
     rt_sem_init(&gc_ioctl_th.sem, "gc_ioctl_sem", 0, RT_IPC_FLAG_FIFO);
     gc_ioctl_th.mb = rt_mb_create("gc_ioctl_mb", 1, RT_IPC_FLAG_FIFO);
 
-    gc24_stat=0xff; //获取当前CH ID
+    //开局需要获取当前无线模块的CH ID，得知IP
+    gc24_stat=0xff;
     Device_write(fd_gc24, (uint8_t*)atmod0,strlen((char*)atmod0));
-//    Device_write(fd_gc24, (uint8_t*)atrn,strlen((char*)atrn));
 
     return RT_EOK;
 }
@@ -142,10 +115,6 @@ void key_th_entry(void *parameter)
         if(KEY_READ(KEY_ON_PIN)==KEY_ON_DOWN_LEVEL){
             rt_sec_delay(3);
             if(KEY_READ(KEY_ON_PIN)==KEY_ON_DOWN_LEVEL){
-//                if(work_stat == WORK_STAT_FREE){
-//                    SYSTEM_POWER_OFF();
-//                }
-
                 if(work_stat == WORK_STAT_IPAD_FREE){
                     work_stat = WORK_STAT_WAIT_RESET;
                     rt_mb_send(led_th.mb, *(uint8_t*)&led_r);
@@ -300,7 +269,7 @@ void gc_send_th_entry(void *parameter)
         rt_sem_take(&gc_send_th.sem,RT_WAITING_FOREVER);
         p=(uint16_t*)(rc522_rxbuf+1);
         if(config.ip == (int)(*p)){
-            //不需要修改
+            //枪卡地址和读卡器一样，就不需要修改了
             work_stat = WORK_STAT_FREE;
             rt_thread_mdelay(50);
             rt_mb_send(led_th.mb, *(uint8_t*)&led_g);
@@ -310,9 +279,12 @@ void gc_send_th_entry(void *parameter)
             continue;
         }
         else{
-            Device_write(fd_gc24, (uint8_t*)rc522_rxbuf, 3);
+            //给靶面发送枪卡的地址信息
+            memcpy((uint8_t*)target_txbuf , (uint8_t*)rc522_rxbuf , 4);
+            target_txbuf[3] = target_txbuf[0] + target_txbuf[1] + target_txbuf[2];
+            Device_write(fd_gc24, (uint8_t*)target_txbuf, 4);
             rt_thread_mdelay(100);
-            //改配置,改和枪卡一样
+            //改配置,使得读卡器和枪卡地址一样
             config.ip_temp = (int)(*p);
             config.id_temp = (uint8_t)(*p&0x000000ff);
             config.ch_temp = (uint8_t)( (*p&0x0000ff00)>>8 );
@@ -378,6 +350,7 @@ void gc_ioctl_th_entry(void*parameter)
                 continue;
             }
             else if((*stat==0x02)||(*stat==0x12)||(*stat==0x22)||(*stat==0xe2)){
+                //修改RFCH
                 pid=atch_;q=atp;d=at_rn;atpidsize=0;
                 for(int i=0;i<strlen((char*)atch_);i++){
                     *q=*pid;
@@ -416,7 +389,9 @@ void gc_ioctl_th_entry(void*parameter)
                     *txbuf=0xAA; *(txbuf+1) = *q;*(txbuf+2) = *(q+1);
                     rt_thread_mdelay(500);  //先等待一会确保靶面的无线模块配置改好了，再回复
                     for(int i=0;i<5;i++){
-                        Device_write(fd_gc24, (uint8_t*)txbuf, 3);
+                        memcpy((uint8_t*)target_txbuf , (uint8_t*)txbuf , 3);
+                        target_txbuf[3] = target_txbuf[0] + target_txbuf[1] + target_txbuf[2];
+                        Device_write(fd_gc24, (uint8_t*)target_txbuf, 4);
                         rt_thread_mdelay(2);
                     }
                     rt_timer_start(gc_chk.tm);
@@ -431,7 +406,9 @@ void gc_ioctl_th_entry(void*parameter)
 
 
                     for(int i=0;i<5;i++){
-                        Device_write(fd_gc24, (uint8_t*)rc522_rxbuf, 3);
+                        memcpy((uint8_t*)target_txbuf , (uint8_t*)rc522_rxbuf , 4);
+                        target_txbuf[3] = target_txbuf[0] + target_txbuf[1] + target_txbuf[2];
+                        Device_write(fd_gc24, (uint8_t*)target_txbuf, 4);
                         rt_thread_mdelay(2);
                     }
 
@@ -507,17 +484,6 @@ void gc_ioctl_th_entry(void*parameter)
                 //成功获取IP
                 config.ip=(((uint16_t)config.ch)<<8)|((uint16_t)config.id);
                 Device_write(fd_gc24, (uint8_t*)atmod1,strlen((char*)atmod1));
-//                Device_write(fd_gc24, (uint8_t*)atrn,strlen((char*)atrn));
-
-//                //尝试跳过0xf4
-//                gc24_stat=0;
-//                rt_mb_send(led_th.mb, *(uint8_t*)&led_g);
-//                rt_sem_release(&led_th.sem);
-//                work_stat = WORK_STAT_FREE;
-//                rt_sem_release(&rc522_th.sem);
-//                Device_write(fd_gc24, (uint8_t*)atrn,strlen((char*)atrn));
-//                Device_write(fd_gc24, (uint8_t*)"ok",2);
-//                continue;
             }
             else if(*stat == 0xf4){
                 //初始化IP获取结束
@@ -603,7 +569,7 @@ void gc_recv_th_entry(void *parameter)
             continue;
         }
         else if((*rxbuf==0xAA)&&(gc24_stat==0x04)){
-            //成功收到靶发来的回复,回发5次
+            //成功收到靶面发来的回复,回发5次
             rt_timer_stop(gc_chk.tm);
             //存起更改后的ip
             config.ip = config.ip_temp;
@@ -638,7 +604,7 @@ void gc_recv_th_entry(void *parameter)
             continue;
         }
         else if((gc24_stat==0x24)&&(*rxbuf==0xAA)){
-            //成功收到IPAD靶发来的回复
+            //成功收到IPAD的靶发来的回复
             rt_timer_stop(gc_chk.tm);
             config.ip = config.ip_temp;
             config.ch = config.ch_temp;
@@ -661,7 +627,7 @@ void gc_chk_tm_callback(void*parameter)
 }
 void gc_chk_th_entry(void *parameter)
 {
-    //接收回复失败，恢复原来的配置
+    //接收回复失败，没有收到靶面回复的信息，读卡器恢复原来的配置
     while(1){
         rt_sem_take(&gc_chk.sem, RT_WAITING_FOREVER);
         gc24_stat=0x10;
