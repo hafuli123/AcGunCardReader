@@ -35,7 +35,7 @@ struct __Config{
 
 __IO int fd_rc522, fd_led, fd_gc24, fd_spiflash;
 __IO uint8_t gc24_stat;
-__IO uint8_t rc522_rxbuf[16] , target_txbuf[4];
+__IO uint8_t rc522_rxbuf[16] ;
 __IO uint8_t flash_rxbuf[4] , flash_txbuf[4];
 __IO uint8_t atmod0[]="AT+MODE=0\r\n" , atmod1[]="AT+MODE=1\r\n" , atrn[]="\r\n";
 __IO uint8_t work_stat; //工作状态
@@ -280,9 +280,7 @@ void gc_send_th_entry(void *parameter)
         }
         else{
             //给靶面发送枪卡的地址信息
-            memcpy((uint8_t*)target_txbuf , (uint8_t*)rc522_rxbuf , 4);
-            target_txbuf[3] = target_txbuf[0] + target_txbuf[1] + target_txbuf[2];
-            Device_write(fd_gc24, (uint8_t*)target_txbuf, 4);
+            Device_write(fd_gc24, (uint8_t*)rc522_rxbuf, 4);
             rt_thread_mdelay(100);
             //改配置,使得读卡器和枪卡地址一样
             config.ip_temp = (int)(*p);
@@ -298,7 +296,7 @@ void gc_send_th_entry(void *parameter)
 
 void gc_ioctl_th_entry(void*parameter)
 {
-    uint8_t *stat , txbuf[3];
+    uint8_t *stat , tx[4];
     uint8_t atp[20],atpid_[]="AT+PID=",atch_[]="AT+RFCH=",at_rn[]="\r\n" , at_q[]="?\r\n";
 
     uint8_t *pid,*q,*d,atpidsize;
@@ -385,13 +383,11 @@ void gc_ioctl_th_entry(void*parameter)
                 }
                 else if(*stat==0x24){
                     //回复IPAD靶，并等待IPAD靶回复
-                    q=(uint8_t*)&config.ip_temp;
-                    *txbuf=0xAA; *(txbuf+1) = *q;*(txbuf+2) = *(q+1);
                     rt_thread_mdelay(500);  //先等待一会确保靶面的无线模块配置改好了，再回复
+                    uint8_t *t;t=(uint8_t*)&config.ip_temp;
+                    tx[0]=0xaa;tx[1]=*t;tx[2]=*(t+1);tx[3]=tx[0]+tx[1]+tx[2];
                     for(int i=0;i<5;i++){
-                        memcpy((uint8_t*)target_txbuf , (uint8_t*)txbuf , 3);
-                        target_txbuf[3] = target_txbuf[0] + target_txbuf[1] + target_txbuf[2];
-                        Device_write(fd_gc24, (uint8_t*)target_txbuf, 4);
+                        Device_write(fd_gc24, (uint8_t*)tx, 4);
                         rt_thread_mdelay(2);
                     }
                     rt_timer_start(gc_chk.tm);
@@ -406,9 +402,7 @@ void gc_ioctl_th_entry(void*parameter)
 
 
                     for(int i=0;i<5;i++){
-                        memcpy((uint8_t*)target_txbuf , (uint8_t*)rc522_rxbuf , 4);
-                        target_txbuf[3] = target_txbuf[0] + target_txbuf[1] + target_txbuf[2];
-                        Device_write(fd_gc24, (uint8_t*)target_txbuf, 4);
+                        Device_write(fd_gc24, (uint8_t*)rc522_rxbuf, 4);
                         rt_thread_mdelay(2);
                     }
 
@@ -587,7 +581,7 @@ void gc_recv_th_entry(void *parameter)
                 work_stat = WORK_STAT_FREE;
                 rt_mb_send(led_th.mb, *(uint8_t*)&led_g);
                 rt_sem_release(&led_th.sem);
-                Device_write(fd_gc24, (uint8_t*)rxbuf, 3);
+                Device_write(fd_gc24, (uint8_t*)rxbuf, 4);
                 memset(rxbuf,0,RX_MAX_COUNT) ;
                 continue;
             }
