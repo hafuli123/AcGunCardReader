@@ -109,7 +109,7 @@ int main(void)
 
 void key_th_entry(void *parameter)
 {
-    uint8_t stat;
+    uint8_t stat[4];
     while(1){
         rt_thread_mdelay(100);
         if(KEY_READ(KEY_ON_PIN)==KEY_ON_DOWN_LEVEL){
@@ -138,8 +138,8 @@ void key_th_entry(void *parameter)
                 if(work_stat == WORK_STAT_FREE){
                     work_stat = WORK_STAT_IPAD_FREE;
                     reset_stat=0;
-                    stat=0xDD;
-                    Device_write(fd_gc24, (uint8_t*)&stat, 1);
+                    stat[0]=0xDD; stat[1]=0x01; stat[2]=0x02;stat[3]=stat[0]+stat[1]+stat[2];
+                    Device_write(fd_gc24, (uint8_t*)stat, 4);
                     rt_mb_send(led_th.mb, *(uint8_t*)&led_y);
                     rt_sem_release(&led_th.sem);
                     while(KEY_READ(KEY_2_PIN)==KEY_ON_DOWN_LEVEL){rt_thread_mdelay(2);}
